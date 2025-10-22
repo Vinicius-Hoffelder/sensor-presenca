@@ -107,3 +107,174 @@ def medir_distancia_cm():
     distancia = pulse_duration * 17150  
     distancia = round(distancia, 2)
     return distancia if 2 < distancia < 400 else -1  
+    
+def buzzer_beep(duration=2, beep_time=0.1, pause_time=0.1):
+    """Faz o buzzer emitir beeps durante 'duration' segundos"""
+    end_time = time.time() + duration
+    while time.time() < end_time:
+        GPIO.output(BUZZER, True)
+        time.sleep(beep_time)
+        GPIO.output(BUZZER, False)
+        time.sleep(pause_time)
+
+try:
+    while True:
+        tempo_agora = time.time()
+        
+        if (tempo_agora - ultima_leitura) < TEMPO_ENTRE_LEITURAS:
+            time.sleep(0.01)
+            continue
+            
+        movimento_atual = GPIO.input(PIR_PIN)
+        ultima_leitura = tempo_agora
+
+ 
+        print(f"PIR: {movimento_atual}, Buzzer: {buzzer_ligado}, Detecções: {deteccoes_consecutivas}")
+
+
+        if movimento_atual:
+            if tempo_high_inicio is None:
+                tempo_high_inicio = tempo_agora
+            elif (tempo_agora - tempo_high_inicio) > TEMPO_MAXIMO_HIGH:
+                print("AVISO: Sensor PIR em HIGH contínuo! Resetando estado para evitar falso positivo.")
+                deteccoes_consecutivas = 0
+                tempo_high_inicio = tempo_agora
+                if buzzer_ligado:
+                    GPIO.output(LED_VERMELHO, False)
+                    GPIO.output(BUZZER, False)
+                    GPIO.output(LED_VERDE, True)
+                    buzzer_ligado = False
+                time.sleep(1)
+                continue
+        else:
+            tempo_high_inicio = None
+
+
+        if movimento_atual:
+            deteccoes_consecutivas += 1
+        else:
+            deteccoes_consecutivas = 0
+
+
+        movimento_real = (deteccoes_consecutivas >= MIN_DETECCOES)
+
+        if not movimento_atual:
+            if tempo_low_inicio is None:
+                tempo_low_inicio = tempo_agora
+            elif (tempo_agora - tempo_low_inicio) > DESABILITADO_TIMEOUT:
+                if not sensor_desabilitado:
+                    print("Sensor PIR parece estar desabilitado (conectado ao GND). Sistema em espera...")
+                    sensor_desabilitado = True
+      
+                GPIO.output(LED_VERMELHO, False)
+                GPIO.output(BUZZER, False)
+                GPIO.output(LED_VERDE, False)
+                buzzer_ligado = False
+            else:
+
+                GPIO.output(LED_VERMELHO, False)
+                GPIO.output(BUZZER, False)
+                GPIO.output(LED_VERDE, True)
+                buzzer_ligado = False
+        else:
+            tempo_low_inicio = None
+            if sensor_desabilitado:
+                print("Sensor PIR reabilitado. Sistema retomado!")
+                sensor_desabilitado = False
+
+  
+        if not sensor_desabilitado:
+
+            if (tempo_agora - ultimo_fim_movimento) < TEMPO_REARME:
+                if buzzer_ligado:
+                    GPIO.output(LED_VERMELHO, False)
+                    GPIO.output(BUZZER, False)
+                    GPIO.output(LED_VERDE, True)
+                    buzzer_ligado = False
+                    print("Tempo de rearme - alarme desligado")
+                movimento_anterior = False
+                continue
+
+
+            if movimento_real:
+                if not movimento_anterior:
+                    detecao_inicio = tempo_agora
+                    distancia_cm = medir_distancia_cm()
+                    print(f"Movimento REAL detectado a {distancia_cm} cm!")
+                    registrar_em_arquivo() 
+
+                if not buzzer_ligado:
+                    GPIO.output(LED_VERMELHO, True)
+                    GPIO.output(BUZZER, True)
+                    GPIO.output(LED_VERDE, False)
+                    buzzer_ligado = True
+                    print("ALARME LIGADO")
+            else:
+                if movimento_anterior:
+                    duracao = tempo_agora - detecao_inicio
+                    print(f"Movimento finalizado! Duração: {duracao:.2f}s")
+                    ultimo_fim_movimento = tempo_agora
+                    registrar_em_arquivo(duracao) 
+                if buzzer_ligado:
+                    GPIO.output(LED_VERMELHO, False)
+                    GPIO.output(BUZZER, False)
+                    GPIO.output(LED_VERDE, True)
+                    buzzer_ligado = False
+                    print("ALARME DESLIGADO")
+
+            movimento_anterior = movimento_real
+
+
+        if movimento_real and not alarme_ligado:
+            print("Movimento REAL detectado!")
+            registrar_em_arquivo() 
+            GPIO.output(LED_VERDE, False)
+            GPIO.output(LED_VERMELHO, True)
+
+            buzzer_beep(duration=2, beep_time=0.1, pause_time=0.1)
+            GPIO.output(LED_VERMELHO, False)
+            GPIO.output(LED_VERDE, True)
+            alarme_ligado = True
+            tempo_alarme_inicio = tempo_agora
+
+        if alarme_ligado and (tempo_agora - tempo_alarme_inicio) > TEMPO_MAXIMO_ALARME:
+            print("PROTEÇÃO: Alarme desligado automaticamente (tempo máximo excedido)")
+            GPIO.output(LED_VERMELHO, False)
+            GPIO.output(BUZZER, False)
+            GPIO.output(LED_VERDE, True)
+            alarme_ligado = False
+            
+            if verificar_sensor_continuo():
+                print("AVISO: Sensor PIR pode estar travado em HIGH!")
+                time.sleep(5) 
+                continue
+
+        if movimento_atual:
+            if not alarme_ligado and (tempo_agora - ultima_deteccao) > TEMPO_ENTRE_LEITURAS:
+                print("Movimento detectado...")
+                GPIO.output(LED_VERMELHO, True)
+                GPIO.output(BUZZER, True)
+                GPIO.output(LED_VERDE, False)
+                alarme_ligado = True
+                tempo_alarme_inicio = tempo_agora
+                ultima_deteccao = tempo_agora
+                registrar_em_arquivo()
+        else:
+            if alarme_ligado:
+                print("Movimento cessou. Desativando alarme...")
+                GPIO.output(LED_VERMELHO, False)
+                GPIO.output(BUZZER, False)
+                GPIO.output(LED_VERDE, True)
+                alarme_ligado = False
+
+        time.sleep(0.1)
+
+except KeyboardInterrupt:
+    print("Encerrando o sistema...")
+
+finally:
+    GPIO.output(LED_VERDE, False)
+    GPIO.output(LED_VERMELHO, False)
+    GPIO.output(BUZZER, False)
+    GPIO.cleanup()
+    print("Sistema encerrado com sucesso.")
